@@ -38,7 +38,6 @@ class SynBatcher:
     def __init__(
         self,
         tnkzr_path: str,
-        task: Literal['same', 'hvm', 'aa'],
         has_targets: bool = True,
         concat_title_and_generation: bool = False
     ):
@@ -46,17 +45,11 @@ class SynBatcher:
         Args:
             tnkzr_path (str): Path to load the `Transformers` tokenizer
             to be used.
-            task (Literal[`same`, `hvm`, `aa`]): Task under consideration.
-                `aa`: Authorship Attribution, `same`: Same Method or Not, `hvm`: Human vs. Machine
             has_targets (bool): Does the dataset have target information.
             Defaults to True.
             concat_title_and_generation (bool): Whether to concatenate the title
             to the generation. Could be useful for non-autoregressive models.
         """
-        if task not in TASKS:
-            raise NotImplementedError(f"{task} has not been implemented")
-
-        self.task = task
         self.has_targets = has_targets
         self.tokenizer = AutoTokenizer.from_pretrained(tnkzr_path)
 
@@ -88,22 +81,10 @@ class SynBatcher:
         if not self.has_targets:
             return ids, text_tokens
 
-        if self.task in ('aa', 'same'):
-            targets = torch.tensor(
-                [sample[3]for sample in batch],
-                dtype=torch.long
-            )
-        else:
-            # Creating binary labels for human v/s machine.
-            # (machine is 1, human 0)
-            new_alg = list(map(
-                lambda x: x != 'human', [sample[3]for sample in batch]
-            ))
-
-            targets = torch.tensor(
-                new_alg,
-                dtype=torch.long
-            )
+        targets = torch.tensor(
+            [sample[3]for sample in batch],
+            dtype=torch.long
+        )
 
         return ids, text_tokens, targets
 
@@ -113,21 +94,28 @@ class SynDataModule(pl.LightningDataModule):
         self,
         data_path: str,
         batcher: SynBatcher,
+        task: Literal['same', 'hvm', 'aa'],
         label2id: Dict[str, int],
         batch_size: int = 16,
         srcs_to_keep: List[str] = ['aa_paper'],
     ):
         """
         Args:
+            data_path: Path to data CSV files.
             data_path (str): Path to the pickled annotations file.
             batcher (SynBatcher): Custom data batching logic.
-            data_sources: Paths to data CSV files.
+            task (Literal[`same`, `hvm`, `aa`]): Task under consideration.
+                `aa`: Authorship Attribution, `same`: Same Method or Not, `hvm`: Human vs. Machine
             label2id (Dict[str, int]): A dictionary mapping the generation algs
             to an integer Id.
             srcs_to_keep (List[str]): Data sources to keep.
         """
         super().__init__()
+        
+        if task not in TASKS:
+            raise NotImplementedError(f"{task} has not been implemented")
 
+        self.task = task
         self.batcher = batcher
         self.data_path = data_path
         self.label2id = label2id
@@ -144,12 +132,24 @@ class SynDataModule(pl.LightningDataModule):
             train_fraction (float): Fraction to use as training data.
         """
         df_base = pd.read_csv(self.data_path)
+
         # Only keep the source in consideration
         df_base = df_base[df_base['src'].isin(self.srcs_to_keep)]
 
+        # Drop null values
+        df_base.dropna(inplace=True)
+
+        # Binary labels for `hvm` task
+        if self.task == 'hvm':
+            df_base['alg'] = df_base['alg'].apply(
+                lambda x: int(x != 'human')
+            )
         # Convert alg to ids
-        if "alg" in df_base.columns:
-            df_base['alg'] = df_base['alg'].apply(lambda x: self.label2id[x])
+        else:
+            if "alg" in df_base.columns:
+                df_base['alg'] = df_base['alg'].apply(
+                    lambda x: self.label2id[x]
+                )
 
         if stage == "fit" or stage is None:
             # Split the training dataset into train and validation.
