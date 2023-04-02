@@ -53,6 +53,12 @@ class SynBatcher:
         self.has_targets = has_targets
         self.tokenizer = AutoTokenizer.from_pretrained(tnkzr_path)
 
+        # GPT Models don't have a padding requirement, hence this is not set
+        # GPT Models have all special tokens set to eos_token
+        if not self.tokenizer.pad_token:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+            self.tokenizer.padding_side = 'left'
+
         self.concat_title_and_generation = concat_title_and_generation
 
     def __call__(self, batch: Sequence):
